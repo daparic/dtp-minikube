@@ -1,0 +1,157 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dtp
+  namespace: parasoft-dtp-namespace
+  labels:
+    app: DTP
+spec:
+  volumes:
+    - name: task-pv-storage
+#      persistentVolumeClaim:
+#        claimName: task-pv-claim
+  containers:
+    - name: task-pv-container
+      image: nginx
+      ports:
+        - containerPort: 80
+          name: "http-server"
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+#      nfs:
+#        server: NFS_SERVER_HOST
+#        path: /dtp/
+# Uncomment section below if you are setting up a custom keystore; you will also need to uncomment out the associated volumeMounts below
+#    - name: keystore-cfgmap-volume
+#      configMap:
+#        name: keystore-cfgmap
+  securityContext:
+    runAsNonRoot: true
+  containers:
+    - name: dtp-server
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault   
+      image: parasoft/dtp
+      imagePullPolicy: Always
+      env:
+        - name: PARASOFT_POD_NAME               #REQUIRED, DO NOT CHANGE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: PARASOFT_POD_NAMESPACE          #REQUIRED, DO NOT CHANGE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+# To configure DTP to connect to your database on startup, please provide your database type, user, user password, and connection URL to the container environment by injecting the values as the DB_TYPE, DB_USER, DB_PASSWORD, and DB_URL environment variables.
+# To prevent exposing sensitive data, please create a user password secret to use for the DB_PASSWORD environment variable.
+# Note that the database type must be one of the following: mysql | oracle | postgresql
+# Note that the environment variable values will override the equivalent persisted values in the PSTRootConfig.xml each time the container or pod is restarted.
+# The following are example settings for a MySQL container called "mysql-container", a database called "DTP", a user called "dtp_user", and a user password secret.
+        - name: DB_TYPE
+          value: "mysql"
+        - name: DB_USER
+          value: "root"
+        - name: DB_PASSWORD
+          value: "root1234"
+#          valueFrom:
+#            secretKeyRef:
+#              name: mysql-secret
+#              key: password
+        - name: DB_URL
+          value: "jdbc:mysql://10.101.4.223:3306/dtp"
+#        - name: DB_HOST
+#          value: 10.101.4.223:3306
+# To configure DTP to automatically download the driver for your database on startup, please provide the JDBC driver URL to the container environment by injecting the value as the JDBC_DRIVER_URL environment variable.
+# The following is an example URL to download the JDBC driver for MySQL 8.0.30.
+        - name: JDBC_DRIVER_URL
+          value: "https://repo1.maven.org/maven2/mysql/mysql-connector-java/5.1.49/mysql-connector-java-5.1.49.jar"        
+#          value: "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.30/mysql-connector-java-8.0.30.jar"
+# To configure DTP to use JVM arguments, please provide the arguments to the container environment by injecting the value as the JAVA_CONFIG_ARGS environment variable.
+# The following is an example JVM argument "com.parasoft.sdm.storage.managers.admin.enable.delete.project.data=true"
+#        - name: JAVA_CONFIG_ARGS
+#          value: "-Dcom.parasoft.sdm.storage.managers.admin.enable.delete.project.data=true"
+      args: ["--run", "dtp"]
+      ports:
+        - name: "http-server"
+          containerPort: 8080
+        - name: "https-server"
+          containerPort: 8443
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+#        - mountPath: "/usr/local/parasoft/data"
+#          name: dtp-data
+# Uncomment section below if you are setting up a custom keystore. Note that updates made to these files will not be reflected inside the container once it's been deployed; you will need to restart the container for it to contain any updates.
+#        - name: keystore-cfgmap-volume
+#          mountPath: "/usr/local/parasoft/dtp/tomcat/conf/.keystore"
+#          subPath: keystore
+#        - name: keystore-cfgmap-volume
+#          mountPath: "/usr/local/parasoft/dtp/tomcat/conf/server.xml"
+#          subPath: server-config
+# To prevent liveness probe failures on environments with low or overly taxed RAM/CPU, we recommend increasing the timeout seconds
+      livenessProbe:
+        exec:
+          command:
+          - healthcheck.sh
+          - --verify
+          - dtp
+        initialDelaySeconds: 120
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 5
+    - name: data-collector
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault   
+      image: parasoft/dtp
+      imagePullPolicy: Always
+      args: ["--run", "datacollector", "--no-copy-data"]
+      ports:
+        - containerPort: 8082
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+      livenessProbe:
+        exec:
+          command:
+          - healthcheck.sh
+          - --verify
+          - datacollector
+        initialDelaySeconds: 120
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 5
+  restartPolicy: Always
+  serviceAccountName: parasoft-account
+  imagePullSecrets:
+    - name: YOUR_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dtp
+  namespace: parasoft-dtp-namespace
+spec:
+  selector:
+    app: DTP
+  ports:
+    - name: "http-server"
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: "data-collector"
+      protocol: TCP
+      port: 8082
+      targetPort: 8082
+    - name: "https-server"
+      protocol: TCP
+      port: 8443
+      targetPort: 8443

@@ -1,0 +1,35 @@
+# Stable access for clients to license server
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: parasoft-account
+  namespace: parasoft-dtp-namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: parasoft-read
+  namespace: parasoft-dtp-namespace
+rules:
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - get
+  - read
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: parasoft-read-bind
+  namespace: parasoft-dtp-namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: parasoft-read
+subjects:
+- kind: ServiceAccount
+  name: parasoft-account
+  namespace: parasoft-dtp-namespace
