@@ -1,0 +1,388 @@
+Step to install DTP in Kubernetes
+1. If in Windows OS, please make sure that you've already download Docker Desktop
+2. To start minikube engine
+$ Minikube start 
+
+3. Follow the guide from docs.parasoft.com
+
+3.1 Create a namespace for DTP to run
+$ kubectl create namespace parasoft-dtp-namespace
+
+3.2 Prepare the yaml file
+
+##################
+# pv-volume.yaml #
+##################
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: task-pv-volume
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 10Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/usr/local/parasoft/data"
+	
+#################
+# pv-claim.yaml #
+#################
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: task-pv-claim
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+	  
+#############################
+# parasoft-permissions.yaml #
+#############################
+
+# Stable access for clients to license server
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: parasoft-account
+  namespace: parasoft-dtp-namespace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: parasoft-read
+  namespace: parasoft-dtp-namespace
+rules:
+- apiGroups:
+  - "*"
+  resources:
+  - "*"
+  verbs:
+  - get
+  - read
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: parasoft-read-bind
+  namespace: parasoft-dtp-namespace
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: parasoft-read
+subjects:
+- kind: ServiceAccount
+  name: parasoft-account
+  namespace: parasoft-dtp-namespace
+
+#####################
+# parasoft-dtp.yaml #
+#####################
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: dtp
+  namespace: parasoft-dtp-namespace
+  labels:
+    app: DTP
+spec:
+  volumes:
+    - name: task-pv-storage
+#      persistentVolumeClaim:
+#        claimName: task-pv-claim
+  containers:
+    - name: task-pv-container
+      image: nginx
+      ports:
+        - containerPort: 80
+          name: "http-server"
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+#      nfs:
+#        server: NFS_SERVER_HOST
+#        path: /dtp/
+# Uncomment section below if you are setting up a custom keystore; you will also need to uncomment out the associated volumeMounts below
+#    - name: keystore-cfgmap-volume
+#      configMap:
+#        name: keystore-cfgmap
+  securityContext:
+    runAsNonRoot: true
+  containers:
+    - name: dtp-server
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault   
+      image: parasoft/dtp
+      imagePullPolicy: Always
+      env:
+        - name: PARASOFT_POD_NAME               #REQUIRED, DO NOT CHANGE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: PARASOFT_POD_NAMESPACE          #REQUIRED, DO NOT CHANGE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+# To configure DTP to connect to your database on startup, please provide your database type, user, user password, and connection URL to the container environment by injecting the values as the DB_TYPE, DB_USER, DB_PASSWORD, and DB_URL environment variables.
+# To prevent exposing sensitive data, please create a user password secret to use for the DB_PASSWORD environment variable.
+# Note that the database type must be one of the following: mysql | oracle | postgresql
+# Note that the environment variable values will override the equivalent persisted values in the PSTRootConfig.xml each time the container or pod is restarted.
+# The following are example settings for a MySQL container called "mysql-container", a database called "DTP", a user called "dtp_user", and a user password secret.
+        - name: DB_TYPE
+          value: "mysql"
+        - name: DB_USER
+          value: "root"
+        - name: DB_PASSWORD
+          value: "root1234"
+#          valueFrom:
+#            secretKeyRef:
+#              name: mysql-secret
+#              key: password
+        - name: DB_URL
+          value: "jdbc:mysql://10.101.4.223:3306/dtp"
+#        - name: DB_HOST
+#          value: 10.101.4.223:3306
+# To configure DTP to automatically download the driver for your database on startup, please provide the JDBC driver URL to the container environment by injecting the value as the JDBC_DRIVER_URL environment variable.
+# The following is an example URL to download the JDBC driver for MySQL 8.0.30.
+        - name: JDBC_DRIVER_URL
+          value: "https://repo1.maven.org/maven2/mysql/mysql-connector-java/5.1.49/mysql-connector-java-5.1.49.jar"        
+#          value: "https://repo1.maven.org/maven2/mysql/mysql-connector-java/8.0.30/mysql-connector-java-8.0.30.jar"
+# To configure DTP to use JVM arguments, please provide the arguments to the container environment by injecting the value as the JAVA_CONFIG_ARGS environment variable.
+# The following is an example JVM argument "com.parasoft.sdm.storage.managers.admin.enable.delete.project.data=true"
+#        - name: JAVA_CONFIG_ARGS
+#          value: "-Dcom.parasoft.sdm.storage.managers.admin.enable.delete.project.data=true"
+      args: ["--run", "dtp"]
+      ports:
+        - name: "http-server"
+          containerPort: 8080
+        - name: "https-server"
+          containerPort: 8443
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+#        - mountPath: "/usr/local/parasoft/data"
+#          name: dtp-data
+# Uncomment section below if you are setting up a custom keystore. Note that updates made to these files will not be reflected inside the container once it's been deployed; you will need to restart the container for it to contain any updates.
+#        - name: keystore-cfgmap-volume
+#          mountPath: "/usr/local/parasoft/dtp/tomcat/conf/.keystore"
+#          subPath: keystore
+#        - name: keystore-cfgmap-volume
+#          mountPath: "/usr/local/parasoft/dtp/tomcat/conf/server.xml"
+#          subPath: server-config
+# To prevent liveness probe failures on environments with low or overly taxed RAM/CPU, we recommend increasing the timeout seconds
+      livenessProbe:
+        exec:
+          command:
+          - healthcheck.sh
+          - --verify
+          - dtp
+        initialDelaySeconds: 120
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 5
+    - name: data-collector
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        seccompProfile:
+          type: RuntimeDefault   
+      image: parasoft/dtp
+      imagePullPolicy: Always
+      args: ["--run", "datacollector", "--no-copy-data"]
+      ports:
+        - containerPort: 8082
+      volumeMounts:
+        - mountPath: "/usr/local/parasoft/data"
+          name: task-pv-storage
+      livenessProbe:
+        exec:
+          command:
+          - healthcheck.sh
+          - --verify
+          - datacollector
+        initialDelaySeconds: 120
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 5
+  restartPolicy: Always
+  serviceAccountName: parasoft-account
+  imagePullSecrets:
+    - name: YOUR_SECRET
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dtp
+  namespace: parasoft-dtp-namespace
+spec:
+  selector:
+    app: DTP
+  ports:
+    - name: "http-server"
+      protocol: TCP
+      port: 8080
+      targetPort: 8080
+    - name: "data-collector"
+      protocol: TCP
+      port: 8082
+      targetPort: 8082
+    - name: "https-server"
+      protocol: TCP
+      port: 8443
+      targetPort: 8443
+	  
+#####################
+# mysql-secret.yaml #
+#####################
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+type: kubernetes.io/basic-auth
+stringData:
+  password: root1234
+
+######################
+# mysql-storage.yaml #
+######################
+  
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: mysql-pv-volume
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pv-claim
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+#########################
+# mysql-deployment.yaml #
+#########################
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - image: mysql:5.6
+        name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-secret
+              key: password
+        ports:
+        - containerPort: 3306
+          name: mysql
+        volumeMounts:
+        - name: mysql-persistent-storage
+          mountPath: /var/lib/mysql
+      volumes:
+      - name: mysql-persistent-storage
+        persistentVolumeClaim:
+          claimName: mysql-pv-claim
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+spec:
+  ports:
+  - port: 3306
+  selector:
+    app: mysql
+
+
+# For Persistent Volume, please visit https://kubernetes.io/docs/tasks/configure-pod-container/configure-persistent-volume-storage/
+
+$ kubectl apply -f https://k8s.io/examples/pods/storage/pv-volume.yaml
+$ kubectl apply -f https://k8s.io/examples/pods/storage/pv-claim.yaml
+$ kubectl get pv task-pv-volume
+$ kubectl get pvc task-pv-claim
+$ kubectl create -f pv-volume.yaml
+$ kubectl create -f pv-claim.yaml
+
+# For MySQL setup, please visit https://phoenixnap.com/kb/kubernetes-mysql
+
+$ kubectl apply -f mysql-secret.yaml
+$ kubectl apply -f mysql-storage.yaml
+$ kubectl apply -f mysql-deployment.yaml
+$ kubectl get pod
+$ kubectl exec --stdin --tty {pod-name} -- /bin/bash
+$ mysql -p
+$ CREATE DATABASE dtp;
+$ DROP DATABASE dtp;
+
+kubectl get svc
+
+$ kubectl create -f parasoft-permissions.yaml
+$ kubectl delete -f parasoft-permissions.yaml
+$ kubectl create -f parasoft-dtp.yaml
+$ kubectl delete -f parasoft-dtp.yaml
+$ kubectl get pods -n parasoft-dtp-namespace
+$ kubectl describe pod dtp -n parasoft-dtp-namespace
+$ kubectl logs -f dtp -n parasoft-dtp-namespace
+$ kubectl logs -f dtp -c data-collector -n parasoft-dtp-namespace
+$ kubectl get pod -n parasoft-dtp-namespace -o wide
+
+# Go inside dtp docker
+$ kubectl exec --stdin --tty dtp -n parasoft-dtp-namespace -- /bin/bash
+
+# For Ingress Controller, please visit https://kubernetes.io/docs/tasks/access-application-cluster/ingress-minikube/
+# Enable the Ingress controller
+$ minikube addons enable ingress
+$ kubectl get pods -n ingress-nginx
+$ kubectl get svc
+
+# Switch namespace
+$ kubectl config set-context --current --namespace=parasoft-dtp-namespace
+
+$ minikube service dtp -n parasoft-dtp-namespace
+$ minikube service dtp --url
