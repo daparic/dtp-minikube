@@ -63,7 +63,7 @@ spec:
 #              name: mysql-secret
 #              key: password
         - name: DB_URL
-          value: "jdbc:mysql://10.98.48.70:3306/dtp"
+          value: "jdbc:mysql://10.96.106.119:3306/dtp"
 #        - name: DB_HOST
 #          value: 10.101.4.223:3306
 # To configure DTP to automatically download the driver for your database on startup, please provide the JDBC driver URL to the container environment by injecting the value as the JDBC_DRIVER_URL environment variable.
